@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Doom File System: laberinto 3D con virus, jefe final y minijuegos, hecho con HTML, CSS y JavaScript.">
+    <title>Sector 02</title>
+    <link rel="icon" type="image/png" href="imagen/hackkkk%20de%20la%20escuela.png">
+    <link rel="apple-touch-icon" href="imagen/hackkkk%20de%20la%20escuela.png">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+    <script src="game.js" defer></script>
+</head>
+<body>
+
+    <!-- Portada (primera pantalla): la imagen y el botón JUGAR -->
+    <div id="screen-title" class="title-screen" role="dialog" aria-modal="true" aria-label="Pantalla de inicio">
+        <img class="title-img" src="imagen/hackkkk%20de%20la%20escuela.png" alt="Hack the School - Sector 02">
+        <button id="btn-title-play" class="video-btn title-btn" type="button">&gt; JUGAR</button>
+    </div>
+
+    <!-- Video de introducción (aparece después de tocar JUGAR) -->
+    <div id="modal-video" class="video-overlay" role="dialog" aria-modal="true" aria-label="Video de introducción" hidden>
+        <video id="intro-video" src="video/IMG_0302_web.mp4" playsinline preload="auto"></video>
+        <button id="btn-video-play" class="video-btn video-btn--play" type="button" hidden>&gt; VER INTRODUCCIÓN</button>
+        <button id="btn-video-skip" class="video-btn video-btn--skip" type="button" hidden>SALTAR &gt;&gt;</button>
+    </div>
+
+    <!-- Introducción: la historia del juego (aparece después del video) -->
+    <div id="modal-intro" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="intro-title" hidden>
+        <div class="alert-box alert-box--wide">
+            <h2 id="intro-title">TRANSMISIÓN ENTRANTE</h2>
+
+            <div class="story">
+                <p style="--i: 0">
+                    <strong>Año 2089.</strong> DOOM FILE SYSTEM, el servidor que guarda todos los archivos
+                    del mundo, acaba de ser infectado.
+                </p>
+                <p style="--i: 1">
+                    Un programa maligno llamado <strong>KERNEL PANIC</strong> se escondió en el núcleo del
+                    sistema y liberó virus, worms, troyanos, rootkits y bombas lógicas por todos los pasillos.
+                </p>
+                <p style="--i: 2">
+                    Vos sos <strong>SENTINEL</strong>, el último robot antivirus que sigue en pie.
+                    Tu misión: limpiar el <strong>SECTOR 02</strong>.
+                </p>
+                <p style="--i: 3">
+                    Pero disparar no alcanza. Cada <strong>HABITACIÓN DE SERVIDOR</strong> (las puertas rojas)
+                    guarda un fragmento de la clave de reinicio, y para abrirla tenés que resolver un
+                    desafío de programación.
+                </p>
+                <p style="--i: 4">
+                    Cuando elimines a todos los virus y recuperes todos los fragmentos,
+                    KERNEL PANIC despertará... y tendrás que enfrentarlo.
+                </p>
+            </div>
+
+            <ol class="mission" aria-label="Objetivos">
+                <li>Eliminá a todos los virus del sector.</li>
+                <li>Entrá a <strong>todas</strong> las habitaciones rojas y resolvé sus preguntas.</li>
+                <li>Derrotá al jefe final.</li>
+            </ol>
+            <p class="story-tip">Seguí el <strong>minimapa</strong> de arriba a la derecha: te muestra dónde están los virus y las habitaciones.</p>
+
+            <button id="btn-intro" type="button">COMENZAR MISIÓN &gt;</button>
+        </div>
+    </div>
+
+    <!-- Selección de nivel -->
+    <div id="modal-level" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="level-title" hidden>
+        <div class="alert-box">
+            <h2 id="level-title">ELEGÍ EL NIVEL</h2>
+            <div class="sector-label">SECTOR</div>
+            <div id="sector-list" class="sector-list">
+                <button type="button" class="sector-btn is-selected" data-sector="0" aria-pressed="true">
+                    <strong>SECTOR 02</strong>
+                    <small>Laberinto clásico - 15 virus</small>
+                </button>
+                <button type="button" class="sector-btn" data-sector="1" aria-pressed="false">
+                    <strong>SECTOR 03</strong>
+                    <small>Mapa enorme - 38 virus - jefe más duro</small>
+                </button>
+            </div>
+
+            <p>El nivel cambia el idioma de las preguntas y respuestas de las habitaciones.</p>
+
+            <div class="level-list">
+                <button type="button" class="level-btn level-btn--easy" data-level="easy">
+                    <strong>EASY</strong>
+                    <small>Preguntas en español - Respuestas en español</small>
+                </button>
+                <button type="button" class="level-btn level-btn--medium" data-level="medium">
+                    <strong>INTERMEDIATE</strong>
+                    <small>Preguntas en inglés - Respuestas en español</small>
+                </button>
+                <button type="button" class="level-btn level-btn--hard" data-level="hard">
+                    <strong>DIFÍCULT</strong>
+                    <small>Preguntas en inglés - Respuestas en inglés</small>
+                </button>
+            </div>
+
+            <button id="btn-pvp" class="pvp-btn" type="button">
+                <strong>DUELO PVP ONLINE</strong>
+                <small>1 contra 1 con un amigo en otra computadora</small>
+            </button>
+        </div>
+    </div>
+
+    <!-- Duelo PVP online -->
+    <div id="modal-pvp" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="pvp-title" hidden>
+        <div class="alert-box">
+            <h2 id="pvp-title">DUELO PVP ONLINE</h2>
+            <p>
+                Jugá 1 contra 1 con un amigo en otra computadora. Gana el primero que consiga
+                <strong>5 eliminaciones</strong>. Los dos necesitan internet. El mapa es el sector
+                que elegiste en el menú anterior (lo elige quien crea la sala).
+            </p>
+            <div class="pvp-profile">
+                <canvas id="pvp-preview" class="pvp-preview" width="64" height="64"
+                        aria-label="Vista previa de tu personaje"></canvas>
+                <div class="pvp-profile-fields">
+                    <label class="sector-label" for="pvp-name">NOMBRE</label>
+                    <input id="pvp-name" class="pvp-input pvp-input--name" type="text" maxlength="12"
+                           autocomplete="off" spellcheck="false">
+                    <div class="sector-label">COLOR</div>
+                    <div id="pvp-colors" class="pvp-swatches"></div>
+                    <div class="sector-label">ASPECTO</div>
+                    <div id="pvp-styles" class="pvp-styles"></div>
+                </div>
+            </div>
+            <div class="pvp-section">
+                <button id="btn-pvp-host" type="button">CREAR SALA</button>
+                <div id="pvp-code" class="pvp-code" aria-live="polite"></div>
+            </div>
+            <div class="pvp-section">
+                <input id="pvp-input" class="pvp-input" type="text" maxlength="5" placeholder="CÓDIGO"
+                       autocomplete="off" spellcheck="false" aria-label="Código de la sala">
+                <button id="btn-pvp-join" type="button">UNIRSE</button>
+            </div>
+            <p id="pvp-status" class="pvp-status" role="status"></p>
+            <button id="btn-pvp-back" class="btn-secondary" type="button">VOLVER</button>
+        </div>
+    </div>
+
+    <!-- Tienda previa al duelo PVP -->
+    <div id="modal-shop" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="shop-title" hidden>
+        <div class="alert-box alert-box--wide">
+            <h2 id="shop-title">TIENDA DE COMBATE</h2>
+            <p>
+                Gastá tus créditos antes del duelo. La pistola es gratis. Durante la pelea usá
+                <kbd>G</kbd> para tirar una granada, <kbd>H</kbd> para curarte y <kbd>F</kbd> para el escudo.
+            </p>
+            <div id="shop-credits" class="shop-credits"></div>
+            <div id="shop-list" class="shop-list"></div>
+            <p id="shop-status" class="pvp-status" role="status"></p>
+            <div class="modal-actions">
+                <button id="btn-shop-ready" type="button">&iexcl;LISTO!</button>
+                <button id="btn-shop-cancel" class="btn-secondary" type="button">CANCELAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pantalla de instrucciones (también se usa como pantalla de fin de partida) -->
+    <div id="modal-alert" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+        <div class="alert-box">
+            <h2 id="modal-title">SECTOR 02: LABERINTO 3D</h2>
+            <div id="level-badge" class="level-badge"></div>
+            <p>
+                Hacé clic en el juego para capturar el mouse: movelo para apuntar y girar, y hacé clic
+                izquierdo para <strong>DISPARAR</strong> a los virus. Usá <kbd>W</kbd> <kbd>A</kbd>
+                <kbd>S</kbd> <kbd>D</kbd> para moverte (adelante, izquierda, atrás y derecha). Las flechas
+                <kbd>IZQ</kbd> <kbd>DER</kbd> también giran la cámara y la <kbd>barra espaciadora</kbd> dispara.
+                Para ganar tenés que <strong>eliminar a todos los virus Y resolver todas las habitaciones
+                rojas</strong>: el minimapa de arriba a la derecha te guía.
+                <kbd>1</kbd> a <kbd>5</kbd> o la rueda del mouse cambian de arma,
+                mantené el <strong>clic derecho</strong> para usar la <strong>mira del francotirador</strong>,
+                <kbd>R</kbd> recarga las balas,
+                <kbd>M</kbd> activa o silencia la música y <kbd>Esc</kbd> libera el mouse y abre la configuración.
+            </p>
+
+            <ul id="bestiary" class="bestiary" aria-label="Tipos de virus">
+                <li><span class="dot dot--virus"></span><strong>VIRUS</strong> equilibrado</li>
+                <li><span class="dot dot--worm"></span><strong>WORM</strong> rápido y frágil</li>
+                <li><span class="dot dot--trojan"></span><strong>TROJAN</strong> grande y resistente</li>
+                <li><span class="dot dot--rootkit"></span><strong>ROOTKIT</strong> atraviesa las paredes</li>
+                <li><span class="dot dot--bomb"></span><strong>BOMB</strong> explota si te alcanza</li>
+                <li><span class="dot dot--boss"></span><strong>???</strong> algo despierta cuando limpies los virus y las habitaciones</li>
+            </ul>
+
+            <div class="modal-actions">
+                <button id="btn-next-sector" type="button" hidden>SIGUIENTE SECTOR &gt;</button>
+                <button id="btn-start" type="button">ENTRAR AL COMBATE</button>
+                <button id="btn-end-menu" class="btn-secondary" type="button" hidden>MENÚ PRINCIPAL</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuración -->
+    <div id="modal-settings" class="modal-overlay modal-overlay--soft" role="dialog"
+         aria-modal="true" aria-labelledby="settings-title" hidden>
+        <div class="alert-box">
+            <h2 id="settings-title">CONFIGURACIÓN</h2>
+
+            <fieldset class="setting-group">
+                <legend>ARMA</legend>
+                <label class="setting-option">
+                    <input type="radio" name="weapon" value="pistol" checked> [1] Pistola de energía
+                </label>
+                <label class="setting-option">
+                    <input type="radio" name="weapon" value="shotgun"> [2] Escopeta (7 perdigones, gasta 2 balas)
+                </label>
+                <label class="setting-option">
+                    <input type="radio" name="weapon" value="smg"> [3] Metralleta (disparo rápido)
+                </label>
+                <label class="setting-option">
+                    <input type="radio" name="weapon" value="plasma"> [4] Plasma (daño x4, gasta 3 balas)
+                </label>
+                <label class="setting-option">
+                    <input type="radio" name="weapon" value="sniper"> [5] Francotirador (mira con clic derecho, daño x6, gasta 5 balas)
+                </label>
+            </fieldset>
+
+            <fieldset class="setting-group">
+                <legend>MOUSE</legend>
+                <label class="setting-option" for="mouse-sensitivity">
+                    Sensibilidad: <output id="mouse-sensitivity-value" for="mouse-sensitivity">1.0x</output>
+                </label>
+                <input id="mouse-sensitivity" class="setting-range" type="range"
+                       min="0.3" max="3" step="0.1" value="1">
+                <label class="setting-option">
+                    <input type="checkbox" id="mouse-vertical" checked> Mirar arriba y abajo
+                </label>
+            </fieldset>
+
+            <fieldset class="setting-group">
+                <legend>SONIDO</legend>
+                <label class="setting-option">
+                    <input type="checkbox" id="music-on" checked> Música de fondo
+                </label>
+                <label class="setting-option" for="music-volume">
+                    Volumen: <output id="music-volume-value" for="music-volume">50%</output>
+                </label>
+                <input id="music-volume" class="setting-range" type="range"
+                       min="0" max="1" step="0.05" value="0.5">
+            </fieldset>
+
+            <p class="setting-hint">
+                Atajos: <kbd>1</kbd>-<kbd>5</kbd> o rueda del mouse arma - clic derecho mira - <kbd>R</kbd> recargar - <kbd>M</kbd> música - <kbd>Esc</kbd> abre y cierra este menú
+            </p>
+            <div class="modal-actions">
+                <button id="btn-settings-close" type="button">VOLVER AL JUEGO</button>
+                <button id="btn-settings-menu" class="btn-secondary" type="button">SALIR AL MENÚ</button>
+            </div>
+        </div>
+    </div>
+
+    <main class="doom-container">
+        <section class="viewport-3d" aria-label="Vista del juego">
+            <canvas id="raycasterCanvas" width="640" height="400"
+                    aria-label="Vista en primera persona del laberinto"></canvas>
+
+            <button id="btn-music" class="icon-btn icon-btn--music" type="button"
+                    aria-label="Activar o silenciar la música" aria-pressed="true" title="Música (M)">SND ON</button>
+
+            <button id="btn-settings" class="icon-btn" type="button"
+                    aria-label="Abrir configuración" title="Configuración (Esc)" hidden>CFG</button>
+
+            <!-- Temporizador de la partida -->
+            <div id="game-timer" class="game-timer" role="timer" aria-label="Tiempo de juego" hidden>TIEMPO 00:00</div>
+
+            <!-- Pantalla 2D de minijuego al entrar a una habitación -->
+            <div id="room-2d" class="room-overlay" hidden>
+                <h3 id="room-title">HABITACIÓN DE ARCHIVO</h3>
+                <p id="room-desc">Superá el desafío del sistema.</p>
+                <div id="room-content"></div>
+            </div>
+        </section>
+    </main>
+
+</body>
+</html>
