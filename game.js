@@ -1459,9 +1459,23 @@ function onNetData(msg) {
         state.sector = msg.sector;
         openShop();
     } else if (msg.t === 'pos' && net.remote && Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-        net.remote.x = msg.x;
-        net.remote.y = msg.y;
-        if (!net.remote.seen) { net.remote.rx = msg.x; net.remote.ry = msg.y; net.remote.seen = true; }
+        const r = net.remote;
+        if (r.seen && now > r.t) {
+            // Velocidad estimada: sirve para predecir hacia dónde va entre mensaje y mensaje
+            const secs = (now - r.t) / 1000;
+            if (secs > 0.01 && secs < 0.5) {
+                r.vx = clamp(r.vx * 0.4 + ((msg.x - r.x) / secs) * 0.6, -6, 6);
+                r.vy = clamp(r.vy * 0.4 + ((msg.y - r.y) / secs) * 0.6, -6, 6);
+            }
+        }
+        r.x = msg.x;
+        r.y = msg.y;
+        r.t = now;
+        r.a = Number.isFinite(msg.a) ? msg.a : null;
+        if (!r.seen) {
+            r.rx = msg.x; r.ry = msg.y; r.seen = true;
+            r.yaw = r.a ?? Math.atan2(player.y - msg.y, player.x - msg.x);
+        }
     } else if (msg.t === 'hit' && state.pvp && !state.over) {
         if (Number.isFinite(msg.d)) damageSelf(clamp(msg.d, 0, 100), now);
     } else if (msg.t === 'ready') {
@@ -1514,7 +1528,11 @@ function startPvp() {
     net.rivalKills = 0;
     net.shieldUntil = 0;
     net.lastNade = 0;
-    net.remote = { x: 0, y: 0, rx: 0, ry: 0, seen: false };
+    net.remote = {
+        x: 0, y: 0, rx: 0, ry: 0, seen: false,
+        vx: 0, vy: 0, t: 0, a: null,                           // velocidad y ángulo recibidos
+        yaw: 0, speed: 0, walk: 0, phase: 0, hurtUntil: 0,     // animación del robot 3D
+    };
     nades.length = 0;
     blasts.length = 0;
     const rival = net.rival ?? { name: 'RIVAL', color: 0, style: 0 };
@@ -1755,11 +1773,11 @@ function drawRivalName(width, height, horizon) {
     if (depth <= 0.1) return;
     const screenX = (width / 2) * (1 + lateral / depth);
     if (screenX < 0 || screenX >= width || depth >= zBuffer[Math.floor(screenX)]) return;
-    const size = ((height * state.zoom) / depth) * PVP.scale;
+    const headY = horizon + ((height * state.zoom) / depth) * (0.5 - ROBOT3D.height - 0.04);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     ctx.font = 'bold 12px "Courier New", monospace';
-    hudLine(net.rival.name, screenX, horizon - size / 2 - 4, '#ffe066');
+    hudLine(net.rival.name, screenX, headY - 4, '#ffe066');
 }
 
 function pvpDie(now) {
@@ -1781,15 +1799,10 @@ function pvpDie(now) {
 
 function pvpTick(dt, now) {
     updateNades(dt, now);
-    const remote = net.remote;
-    if (remote?.seen) {
-        const k = Math.min(1, dt * 15);                        // suaviza el movimiento del rival
-        remote.rx += (remote.x - remote.rx) * k;
-        remote.ry += (remote.y - remote.ry) * k;
-    }
+    if (net.remote?.seen) updateRemoteRobot(net.remote, dt, now);
     if (now - net.lastSend >= PVP.sendMs) {
         net.lastSend = now;
-        netSend({ t: 'pos', x: player.x, y: player.y });
+        netSend({ t: 'pos', x: player.x, y: player.y, a: Math.atan2(player.dirY, player.dirX) });
     }
 }
 
@@ -1812,6 +1825,223 @@ function pvpEnd(won, reason = '') {
         dom.modal.hidden = false;
         dom.endMenuBtn.focus();
     }, CONFIG.endScreenDelayMs);
+}
+
+/* --- Robot 3D (el rival del PVP) --------------------------------------------
+ * Se arma con cajas (cabeza, torso, brazos, piernas), tiene volumen real, se gira hacia donde mira,
+ * camina con las piernas y los brazos en contrafase, y está apoyado en el piso con su sombra. */
+
+const ROBOT3D = Object.freeze({
+    height: 0.8,          // alto total (1 = alto de una pared)
+    stride: 1.1,          // casillas que recorre en un ciclo completo de pasos (izquierdo + derecho)
+    swing: 0.55,          // balanceo máximo de piernas y brazos (radianes)
+    hitHalfWidth: 0.24,   // mitad del ancho del cuerpo para los disparos
+    shadow: 0.25,         // radio de la sombra en el piso
+});
+
+const rgbCache = new Map();
+function hexToRgb(hex) {
+    let rgb = rgbCache.get(hex);
+    if (!rgb) {
+        const n = parseInt(hex.slice(1), 16);
+        rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+        rgbCache.set(hex, rgb);
+    }
+    return rgb;
+}
+
+/* Caras de una caja: índices de vértices (bit 0 = x, bit 1 = alto, bit 2 = adelante) y su normal local */
+const BOX_FACES = Object.freeze([
+    { v: [1, 3, 7, 5], n: [1, 0, 0] },
+    { v: [0, 2, 6, 4], n: [-1, 0, 0] },
+    { v: [2, 3, 7, 6], n: [0, 1, 0] },
+    { v: [0, 1, 5, 4], n: [0, -1, 0] },
+    { v: [4, 5, 7, 6], n: [0, 0, 1] },
+    { v: [0, 1, 3, 2], n: [0, 0, -1] },
+]);
+
+/** Mueve al robot hacia donde está el rival real: predice, suaviza y calcula la animación de caminata. */
+function updateRemoteRobot(r, dt, now) {
+    if (dt <= 0) return;
+    const lead = Math.min(0.08, Math.max(0, (now - r.t) / 1000));   // se adelanta un poco a lo que viene
+    const tx = r.x + r.vx * lead;
+    const ty = r.y + r.vy * lead;
+    const px = r.rx;
+    const py = r.ry;
+    if (Math.hypot(tx - px, ty - py) > 2.5) {                       // reaparición: no se desliza por las paredes
+        r.rx = tx;
+        r.ry = ty;
+    } else {
+        const k = 1 - Math.exp(-dt * 18);
+        r.rx += (tx - px) * k;
+        r.ry += (ty - py) * k;
+    }
+
+    const moved = Math.hypot(r.rx - px, r.ry - py);
+    r.speed += (moved / dt - r.speed) * (1 - Math.exp(-dt * 10));
+    r.walk += (clamp(r.speed / 1.2, 0, 1) - r.walk) * (1 - Math.exp(-dt * 12));
+    r.phase += (moved * Math.PI * 2) / ROBOT3D.stride;              // un paso por cada tramo recorrido
+
+    // Hacia dónde mira: el ángulo real del rival; si no llega, hacia donde camina o hacia vos
+    let target;
+    if (Number.isFinite(r.a)) target = r.a;
+    else if (moved > 0.002) target = Math.atan2(r.ry - py, r.rx - px);
+    else target = Math.atan2(player.y - r.ry, player.x - r.rx);
+    const diff = Math.atan2(Math.sin(target - r.yaw), Math.cos(target - r.yaw));
+    r.yaw += diff * (1 - Math.exp(-dt * 14));
+}
+
+/** Las cajas del robot en su propio sistema: x = derecha, h = altura desde el piso, z = adelante. */
+function robotParts(style, c, walk, phase, now) {
+    const swing = Math.sin(phase) * ROBOT3D.swing * walk;
+    const lift = Math.abs(Math.cos(phase)) * 0.014 * walk + Math.sin(now / 420) * 0.004 * (1 - walk);
+    const white = '#e8f4ff';
+    const parts = [];
+    const add = (x, h, z, sx, sh, sz, color, pivotH = 0, ang = 0) => {
+        parts.push({ x, h: h + lift, z, sx, sh, sz, color, pivotH: pivotH + lift, ang });
+    };
+
+    for (const side of [-1, 1]) {
+        add(side * 0.075, 0.15, 0, 0.09, 0.26, 0.10, c.dark, 0.28, side * swing);              // pierna
+        add(side * 0.075, 0.025, 0.025, 0.10, 0.05, 0.16, '#2b3340', 0.28, side * swing);      // pie
+        add(side * 0.185, 0.37, 0, 0.07, 0.22, 0.08, white, 0.48, -side * swing * 0.9);        // brazo
+        add(side * 0.185, 0.25, 0.005, 0.08, 0.05, 0.09, c.dark, 0.48, -side * swing * 0.9);   // mano
+    }
+    add(0, 0.285, 0, 0.22, 0.05, 0.12, c.dark);                                                  // cadera
+    add(0, 0.39, 0, 0.28, 0.22, 0.16, c.body);                                                   // torso
+    add(0, 0.42, 0.085, 0.12, 0.05, 0.012, c.eye);                                               // luz del pecho
+    add(0, 0.51, 0, 0.07, 0.04, 0.07, c.dark);                                                   // cuello
+    add(0, 0.625, 0, 0.22, 0.19, 0.19, white);                                                   // cabeza
+    add(0, 0.63, 0.096, 0.17, 0.085, 0.012, '#06080c');                                          // visor
+    add(-0.04, 0.632, 0.104, 0.04, 0.03, 0.012, c.eye);                                          // ojos
+    add(0.04, 0.632, 0.104, 0.04, 0.03, 0.012, c.eye);
+    if (style === 1) {                                                                           // casco
+        add(0, 0.725, 0, 0.24, 0.05, 0.21, c.dark);
+        add(0, 0.752, 0, 0.22, 0.016, 0.19, c.body);
+    } else if (style === 2) {                                                                    // orejas
+        add(-0.125, 0.64, 0, 0.03, 0.13, 0.07, c.body);
+        add(0.125, 0.64, 0, 0.03, 0.13, 0.07, c.body);
+    } else {                                                                                     // antena
+        add(0, 0.76, 0, 0.016, 0.07, 0.016, '#ff3355');
+        add(0, 0.80, 0, 0.035, 0.035, 0.035, '#ff3355');
+    }
+    return parts;
+}
+
+function drawRobot3D(sprite, now, width, height, horizon) {
+    const r = sprite.robot;
+    const base = project(r.rx, r.ry);
+    if (base.depth < 0.3) return;                                   // pegado a la cámara
+
+    const look = sprite.look ?? { color: 0, style: 0 };
+    const c = PLAYER_COLORS[look.color] ?? PLAYER_COLORS[0];
+    const sinY = Math.sin(r.yaw);
+    const cosY = Math.cos(r.yaw);
+    const unit = height * state.zoom;                               // alto de una pared a 1 casilla
+    const half = width / 2;
+    const camH = 0.5;                                               // la cámara está a media pared
+    const fog = 1 - 0.65 * Math.min(1, base.depth / CONFIG.fogDistance);
+    const flash = now < r.hurtUntil;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    const boxes = [];
+    for (const p of robotParts(look.style, c, r.walk, r.phase, now)) {
+        const cosA = Math.cos(p.ang);
+        const sinA = Math.sin(p.ang);
+        const verts = [];
+        let depthSum = 0;
+        for (let i = 0; i < 8; i++) {
+            let lx = p.x + ((i & 1) ? p.sx : -p.sx) / 2;
+            let lh = p.h + ((i & 2) ? p.sh : -p.sh) / 2;
+            let lz = p.z + ((i & 4) ? p.sz : -p.sz) / 2;
+            if (p.ang) {                                            // balanceo alrededor de la cadera / el hombro
+                const dh = lh - p.pivotH;
+                const nz = lz * cosA - dh * sinA;
+                lh = p.pivotH + lz * sinA + dh * cosA;
+                lz = nz;
+            }
+            const wx = r.rx + lx * sinY + lz * cosY;
+            const wy = r.ry - lx * cosY + lz * sinY;
+            const q = project(wx, wy);
+            if (q.depth < 0.08) return;
+            const sx = half * (1 + q.x / q.depth);
+            verts.push({ wx, wy, h: lh, sx, sy: horizon + (unit / q.depth) * (0.5 - lh) });
+            depthSum += q.depth;
+            if (sx < minX) minX = sx;
+            if (sx > maxX) maxX = sx;
+        }
+
+        const faces = [];
+        for (const face of BOX_FACES) {
+            let [nx, nh, nz] = face.n;
+            if (p.ang) {
+                const tz = nz * cosA - nh * sinA;
+                nh = nz * sinA + nh * cosA;
+                nz = tz;
+            }
+            const wnx = nx * sinY + nz * cosY;
+            const wny = -nx * cosY + nz * sinY;
+            let cx = 0;
+            let cy = 0;
+            let ch = 0;
+            for (const vi of face.v) { cx += verts[vi].wx; cy += verts[vi].wy; ch += verts[vi].h; }
+            cx /= 4; cy /= 4; ch /= 4;
+            const vx = camera.x - cx;
+            const vy = camera.y - cy;
+            const vh = camH - ch;
+            const dot = wnx * vx + wny * vy + nh * vh;
+            if (dot <= 0) continue;                                 // cara de atrás: no se ve
+            const headlight = dot / Math.hypot(vx, vy, vh);
+            const diffuse = Math.max(0, wnx * -0.38 + wny * -0.28 + nh * 0.88);
+            faces.push({ pts: face.v.map((vi) => verts[vi]), shade: (0.38 + 0.32 * diffuse + 0.42 * headlight) * fog });
+        }
+        boxes.push({ depth: depthSum / 8, color: p.color, faces });
+    }
+
+    // Solo se dibuja donde no hay una pared delante
+    const x0 = Math.max(0, Math.floor(minX));
+    const x1 = Math.min(width - 1, Math.ceil(maxX));
+    const testDepth = base.depth - 0.12;
+    ctx.save();
+    ctx.beginPath();
+    let runStart = -1;
+    for (let x = x0; x <= x1 + 1; x++) {
+        const visible = x <= x1 && testDepth < zBuffer[x];
+        if (visible && runStart < 0) runStart = x;
+        else if (!visible && runStart >= 0) { ctx.rect(runStart, 0, x - runStart, height); runStart = -1; }
+    }
+    ctx.clip();
+
+    // Sombra en el piso, para que se vea apoyado y no flotando
+    const rad = ROBOT3D.shadow;
+    const yNear = horizon + (unit * 0.5) / Math.max(0.1, base.depth - rad);
+    const yFar = horizon + (unit * 0.5) / (base.depth + rad);
+    ctx.fillStyle = `rgba(0, 0, 0, ${(0.42 * fog + 0.1).toFixed(2)})`;
+    ctx.beginPath();
+    ctx.ellipse(half * (1 + base.x / base.depth), (yNear + yFar) / 2, (half * rad) / base.depth * 1.1, Math.max(1, (yNear - yFar) / 2), 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cajas de la más lejana a la más cercana
+    boxes.sort((a, b) => b.depth - a.depth);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    for (const box of boxes) {
+        const rgb = hexToRgb(box.color);
+        for (const f of box.faces) {
+            const k = Math.min(1.1, f.shade);
+            const mix = (v) => Math.round(Math.min(255, flash ? v * k * 0.35 + 255 * 0.65 : v * k));
+            ctx.fillStyle = `rgb(${mix(rgb[0])}, ${mix(rgb[1])}, ${mix(rgb[2])})`;
+            ctx.beginPath();
+            ctx.moveTo(f.pts[0].sx, f.pts[0].sy);
+            for (let i = 1; i < 4; i++) ctx.lineTo(f.pts[i].sx, f.pts[i].sy);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
+    ctx.restore();
 }
 
 function makeRobotTexture(colorIdx, styleIdx) {
@@ -2039,9 +2269,13 @@ function fireRay(now, weapon, offX, offY) {
     if (state.pvp && net.remote?.seen) {
         const { x: lateral, depth } = project(net.remote.rx, net.remote.ry);
         if (depth > 0.1 && depth <= wallDepth && depth < targetDepth) {
-            const reach = (((height * state.zoom) / depth) * PVP.scale) * CONFIG.enemyHitRadius;
+            // El robot está parado en el piso: va de los pies (+0.5 de pared bajo el horizonte) a la cabeza
+            const unit = (height * state.zoom) / depth;
             const aimOffsetX = Math.abs((width / 2) * (lateral / depth) - offX);
-            hitRival = aimOffsetX <= reach && aimOffsetY <= reach;
+            const crossY = offY - state.lookOffset * state.zoom;   // mira respecto del horizonte
+            hitRival = aimOffsetX <= ROBOT3D.hitHalfWidth * unit
+                && crossY >= -(ROBOT3D.height - 0.5 + 0.03) * unit
+                && crossY <= (0.5 + 0.02) * unit;
         }
     }
 
@@ -2049,6 +2283,7 @@ function fireRay(now, weapon, offX, offY) {
     const py = height / 2 + offY;
     if (hitRival) {
         spawnParticles(px, py, weapon.pellets > 1 ? 6 : 16, ['#ff3355', '#ffffff'], 200, 0.45);
+        net.remote.hurtUntil = now + 120;                       // el robot parpadea blanco al recibir un golpe
         netSend({ t: 'hit', d: weapon.damage * PVP.damageMul });
     } else if (target) {
         spawnParticles(px, py, weapon.pellets > 1 ? 6 : 16, [target.type.color, '#ffffff'], 200, 0.45);
@@ -3076,10 +3311,7 @@ function collectSprites(now) {
     }
 
     if (state.pvp && net.remote?.seen) {
-        sprites.push({
-            x: net.remote.rx, y: net.remote.ry, texture: remoteTexture, scale: PVP.scale,
-            alpha: 1, bobAmount: 0.04, bobSpeed: 250, bobPhase: 0,
-        });
+        sprites.push({ x: net.remote.rx, y: net.remote.ry, robot: net.remote, look: net.rival });
     }
 
     for (const n of nades) {
@@ -3119,6 +3351,11 @@ function drawSprites(now, width, height, horizon) {
     for (const sprite of sorted) {
         const { x: lateral, depth } = project(sprite.x, sprite.y);
         if (depth <= 0.1) continue;                                // detrás de la cámara
+
+        if (sprite.robot) {                                        // el rival se dibuja como modelo 3D
+            drawRobot3D(sprite, now, width, height, horizon);
+            continue;
+        }
 
         const size = Math.floor(((height * state.zoom) / depth) * sprite.scale);
         if (size < 1) continue;
